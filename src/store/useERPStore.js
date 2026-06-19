@@ -1913,6 +1913,119 @@ export const useERPStore = create(
         get().refreshReportStats()
         get().addAudit('cash.close', 'Caja', current, { counted: toNumber(counted), difference: toNumber(counted) - current.expected, summary: report })
       },
+
+      verifyDataIntegrity() {
+        const state = get()
+        const invalidStatuses = new Set(['deleted', 'eliminado', 'cancelled', 'canceled', 'cancelado', 'cancelada', 'voided', 'anulada', 'anulado'])
+        const report = { orphanInvoices: 0, orphanReceivables: 0, orphanPayments: 0, orphanInventoryMovements: 0, orphanFinancialMovements: 0, orphanCreditNotes: 0, invalidStatusInvoices: 0, details: [] }
+        const validInvoiceIds = new Set(state.invoices.map((inv) => inv.id))
+        const validProductIds = new Set(state.products.map((p) => p.id))
+
+        state.invoices.forEach((inv) => {
+          const s = String(inv.status || '').toLowerCase()
+          if (invalidStatuses.has(s)) {
+            report.invalidStatusInvoices += 1; report.details.push(`Factura ${inv.number || inv.ncf || inv.id} estado '${inv.status}' (debe eliminarse)`)
+          }
+        })
+        ;(state.receivables || []).forEach((rec) => {
+          const invoice = state.invoices.find((inv) => inv.id === rec.invoiceId)
+          if (!invoice) {
+            report.orphanReceivables += 1; report.details.push(`CxC ${rec.id} referencia factura inexistente: ${rec.invoiceId}`)
+          } else if (invalidStatuses.has(String(invoice.status || '').toLowerCase())) {
+            report.orphanReceivables += 1; report.details.push(`CxC ${rec.id} referencia factura ${invoice.status}: ${invoice.number || invoice.ncf || invoice.id}`)
+          }
+        })
+        ;(state.payments || []).forEach((pay) => {
+          const invoiceExists = pay.invoiceId && state.invoices.some((inv) => inv.id === pay.invoiceId && !invalidStatuses.has(String(inv.status || '').toLowerCase()))
+          const receivableExists = pay.receivableId && (state.receivables || []).some((r) => r.id === pay.receivableId)
+          if (!invoiceExists && !receivableExists) {
+            report.orphanPayments += 1; report.details.push(`Pago ${pay.id} sin factura ni CxC valida`)
+          }
+        })
+        ;(state.inventoryMovements || []).forEach((mov) => {
+          if (mov.productId && !validProductIds.has(mov.productId)) {
+            report.orphanInventoryMovements += 1; report.details.push(`Mov inv ${mov.id} referencia producto inexistente: ${mov.productId}`)
+          }
+        })
+        ;(state.financialMovements || []).forEach((fm) => {
+          if (fm.invoiceId && !validInvoiceIds.has(fm.invoiceId)) {
+            report.orphanFinancialMovements += 1; report.details.push(`Mov fin ${fm.id} referencia documento inexistente: ${fm.invoiceId}`)
+          }
+        })
+        ;(state.creditNotes || []).forEach((note) => {
+          if (!note.invoiceId) return
+          const invoice = state.invoices.find((inv) => inv.id === note.invoiceId)
+          if (!invoice || invalidStatuses.has(String(invoice.status || '').toLowerCase())) {
+            report.orphanCreditNotes += 1; report.details.push(`NC ${note.number || note.ncf || note.id} referencia factura invalida: ${note.invoiceId}`)
+          }
+        })
+        return report
+      },
+
+      cleanupOrphanData() {
+        const state = get()
+        const invalidStatuses = new Set(['deleted', 'eliminado', 'cancelled', 'canceled', 'cancelado', 'cancelada', 'voided', 'anulada', 'anulado'])
+        const removed = { invoices: 0, receivables: 0, payments: 0, inventoryMovements: 0, financialMovements: 0, creditNotes: 0 }
+        const allProductIds = new Set(state.products.map((p) => p.id))
+        const validInvoiceIds = new Set()
+        const keptInvoiceIds = new Set()
+        const keptReceivableIds = new Set()
+
+        state.invoices.forEach((inv) => {
+          const s = String(inv.status || '').toLowerCase()
+          if (invalidStatuses.has(s)) { removed.invoices += 1 }
+          else { validInvoiceIds.add(inv.id); keptInvoiceIds.add(inv.id) }
+        })
+        ;(state.receivables || []).forEach((rec) => {
+          const invoice = state.invoices.find((inv) => inv.id === rec.invoiceId)
+          const invoiceStatus = invoice ? String(invoice.status || '').toLowerCase() : ''
+          if (!invoice || invalidStatuses.has(invoiceStatus)) { removed.receivables += 1 }
+          else { keptReceivableIds.add(rec.id) }
+        })
+        ;(state.payments || []).forEach((pay) => {
+          const hasInvoice = pay.invoiceId && keptInvoiceIds.has(pay.invoiceId)
+          const hasReceivable = pay.receivableId && keptReceivableIds.has(pay.receivableId)
+          if (!hasInvoice && !hasReceivable) removed.payments += 1
+        })
+        ;(state.inventoryMovements || []).forEach((mov) => {
+          if (mov.productId && !allProductIds.has(mov.productId)) removed.inventoryMovements += 1
+        })
+        ;(state.financialMovements || []).forEach((fm) => {
+          if (fm.invoiceId && !validInvoiceIds.has(fm.invoiceId)) removed.financialMovements += 1
+        })
+        ;(state.creditNotes || []).forEach((note) => {
+          const invoiceExists = note.invoiceId && state.invoices.some((inv) => inv.id === note.invoiceId && !invalidStatuses.has(String(inv.status || '').toLowerCase()))
+          if (note.invoiceId && !invoiceExists) removed.creditNotes += 1
+        })
+
+        if (Object.values(removed).every((v) => v === 0)) {
+          return { removed, message: 'No se encontraron datos huerfanos.' }
+        }
+
+        set((current) => ({
+          invoices: current.invoices.filter((inv) => !invalidStatuses.has(String(inv.status || '').toLowerCase())),
+          receivables: (current.receivables || []).filter((rec) => {
+            const invoice = current.invoices.find((inv) => inv.id === rec.invoiceId)
+            if (!invoice) return false
+            return !invalidStatuses.has(String(invoice.status || '').toLowerCase())
+          }),
+          payments: (current.payments || []).filter((pay) => {
+            const hasInvoice = pay.invoiceId && keptInvoiceIds.has(pay.invoiceId)
+            const hasReceivable = pay.receivableId && keptReceivableIds.has(pay.receivableId)
+            return hasInvoice || hasReceivable
+          }),
+          inventoryMovements: (current.inventoryMovements || []).filter((mov) => !(mov.productId && !allProductIds.has(mov.productId))),
+          financialMovements: (current.financialMovements || []).filter((fm) => !(fm.invoiceId && !validInvoiceIds.has(fm.invoiceId))),
+          creditNotes: (current.creditNotes || []).filter((note) => {
+            if (!note.invoiceId) return true
+            const invoice = current.invoices.find((inv) => inv.id === note.invoiceId)
+            return invoice && !invalidStatuses.has(String(invoice.status || '').toLowerCase())
+          }),
+        }))
+        get().refreshReportStats()
+        get().addAudit('data.cleanup', 'Sistema', null, removed)
+        return { removed, message: `Limpieza completada. Se eliminaron ${Object.values(removed).reduce((a, b) => a + b, 0)} registros huerfanos.` }
+      },
     }),
     {
       name: 'trifusion-erp-state-v2',
