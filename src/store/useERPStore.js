@@ -1359,8 +1359,7 @@ export const useERPStore = create(
           invoices: state.invoices.map((inv) => {
             if (inv.id !== invoiceId) return inv
             const newBalanceDue = Math.max(toNumber(inv.balanceDue || inv.totals?.total || 0) - creditReduction, 0)
-            const newPaidAmount = Math.max(toNumber(inv.paidAmount || 0) - creditCash, 0)
-            return { ...inv, balanceDue: newBalanceDue, paidAmount: newPaidAmount, paymentStatus: newBalanceDue <= 0 ? 'paid' : inv.paymentStatus, status: newBalanceDue <= 0 ? 'paid' : inv.status }
+            return { ...inv, balanceDue: newBalanceDue, paidAmount: toNumber(inv.paidAmount || 0), paymentStatus: newBalanceDue <= 0 ? 'paid' : inv.paymentStatus, status: newBalanceDue <= 0 ? 'paid' : inv.status }
           }),
           receivables: state.receivables.map((receivable) => (
             receivable.invoiceId === invoiceId

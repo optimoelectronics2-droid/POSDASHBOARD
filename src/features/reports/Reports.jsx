@@ -17,6 +17,7 @@ export function Reports() {
   const reportStats = useERPStore((state) => state.reportStats)
   const inventoryReports = useERPStore((state) => state.inventoryReports)
   const ensureReportStats = useERPStore((state) => state.ensureReportStats)
+  const creditNotes = useERPStore((state) => state.creditNotes || [])
   const [mode, setMode] = useState('all')
   const [profitPeriod, setProfitPeriod] = useState('filtered')
   const [periodTable, setPeriodTable] = useState('monthly')
@@ -42,6 +43,16 @@ export function Reports() {
   const periodRows = report.periods?.[periodTable] || []
   const totalGeneral = buckets.taxed.total + buckets.noTax.total + buckets.mixed.total
 
+  const refundsByInvoice = useMemo(() => {
+    const map = new Map()
+    ;(creditNotes || []).forEach((note) => {
+      if (note.status === 'voided' || note.status === 'anulada' || note.status === 'draft' || note.status === 'deleted') return
+      const refunds = (note.payments || []).filter((p) => !String(p.method || '').toLowerCase().includes('credito')).reduce((s, p) => s + Number(p.amount), 0)
+      if (refunds > 0) map.set(note.invoiceId, (map.get(note.invoiceId) || 0) + refunds)
+    })
+    return map
+  }, [creditNotes])
+
   const cashCreditSplitData = useMemo(() => {
     let cashTotal = 0, creditTotal = 0, cashCount = 0, creditCount = 0, creditPaid = 0, creditPending = 0
     filteredInvoices.forEach((inv) => {
@@ -49,11 +60,14 @@ export function Reports() {
       const hasCredit = payments.some((p) => String(p.method || '').toLowerCase().includes('credito'))
       const total = Number(inv.totals?.total || 0)
       const paid = Number(inv.paidAmount || 0)
-      if (hasCredit) { creditTotal += total; creditCount += 1; creditPaid += paid; creditPending += inv.balanceDue != null ? Math.max(0, Number(inv.balanceDue)) : Math.max(0, total - paid) }
-      else { cashTotal += total; cashCount += 1 }
+      if (hasCredit) {
+        const refunds = refundsByInvoice.get(inv.id) || 0
+        const effectivePaid = Math.max(0, paid - refunds)
+        creditTotal += total; creditCount += 1; creditPaid += effectivePaid; creditPending += Math.max(0, total - effectivePaid)
+      } else { cashTotal += total; cashCount += 1 }
     })
     return { cashTotal, creditTotal, cashCount, creditCount, creditPaid, creditPending, pctCash: (cashTotal + creditTotal) > 0 ? (cashTotal / (cashTotal + creditTotal)) * 100 : 0 }
-  }, [filteredInvoices])
+  }, [filteredInvoices, refundsByInvoice])
 
   const creditInvoiceDetails = useMemo(() => {
     return filteredInvoices.filter((inv) => {
@@ -61,13 +75,15 @@ export function Reports() {
       return payments.some((p) => String(p.method || '').toLowerCase().includes('credito'))
     }).map((inv) => {
       const total = Number(inv.totals?.total || 0); const paid = Number(inv.paidAmount || 0)
+      const refunds = refundsByInvoice.get(inv.id) || 0
+      const effectivePaid = Math.max(0, paid - refunds)
       return {
         number: inv.number || inv.ncf || '', customer: inv.customerName || '', date: inv.issuedAt || inv.createdAt || '',
-        total: currency.format(total), paid: currency.format(paid), pending: currency.format(inv.balanceDue != null ? Math.max(0, Number(inv.balanceDue)) : Math.max(0, total - paid)),
-        pctPaid: total > 0 ? ((paid / total) * 100).toFixed(1) + '%' : '0%', status: inv.status || '',
+        total: currency.format(total), paid: currency.format(effectivePaid), pending: currency.format(Math.max(0, total - effectivePaid)),
+        pctPaid: total > 0 ? ((effectivePaid / total) * 100).toFixed(1) + '%' : '0%', status: inv.status || '',
       }
     })
-  }, [filteredInvoices])
+  }, [filteredInvoices, refundsByInvoice])
 
   const barData = useMemo(() => ({
     labels: ['Filtrado'],

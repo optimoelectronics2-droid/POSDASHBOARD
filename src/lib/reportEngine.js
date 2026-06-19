@@ -66,6 +66,12 @@ export function buildHistoricalReport({ invoices = [], creditNotes = [], product
   stats.duplicateDocuments.push(...dedupedInvoices.duplicates, ...dedupedNotes.duplicates)
   stats.source.duplicateCount = stats.duplicateDocuments.length
 
+  const refundsByInvoice = new Map()
+  dedupedNotes.documents.forEach((note) => {
+    if (classifyCreditNote(note) !== 'valid') return
+    const refunds = (note.payments || []).filter((p) => !isCreditMethod(p.method)).reduce((s, p) => s + toNumber(p.amount), 0)
+    if (refunds > 0) refundsByInvoice.set(note.invoiceId, (refundsByInvoice.get(note.invoiceId) || 0) + refunds)
+  })
   const creditInvoiceIds = new Set()
   const cashInvoiceData = []
   const creditInvoiceData = []
@@ -82,7 +88,9 @@ export function buildHistoricalReport({ invoices = [], creditNotes = [], product
     if (validity !== 'valid') { stats.invalidDocuments.push(documentIssue(invoice, validity)); return }
 
     stats.source.validInvoiceCount += 1
-    const metric = invoiceMetric(invoice)
+    const refundAmount = refundsByInvoice.get(invoice.id) || 0
+    const effectivePaid = Math.max(0, toNumber(invoice.paidAmount || 0) - refundAmount)
+    const metric = invoiceMetric(invoice, 1, effectivePaid)
     const paymentRatio = metric.paymentRatio
     addToFiscalBucket(fiscalBuckets, invoice, metric)
     addFiscalGroupRows(fiscalGroups, invoice)
@@ -136,10 +144,10 @@ export function buildHistoricalReport({ invoices = [], creditNotes = [], product
 
   stats.executiveSummary = buildExecutiveSummary(allInvoices, dedupedNotes.documents, historical, creditInvoiceData)
   stats.cashSales = buildCashSalesSection(cashInvoiceData, allInvoices, historical)
-  stats.creditSales = buildCreditSalesSection(creditInvoiceData, historical)
+  stats.creditSales = buildCreditSalesSection(creditInvoiceData, historical, refundsByInvoice)
   stats.averageTicket = buildAverageTicketSection(historical)
   stats.profitability = buildProfitabilitySection(allInvoices, historical)
-  stats.accountsReceivable = buildAccountsReceivableSection(creditInvoiceData, dedupedInvoices.documents)
+  stats.accountsReceivable = buildAccountsReceivableSection(creditInvoiceData, dedupedInvoices.documents, refundsByInvoice)
   stats.taxSummary = buildTaxSummarySection(stats.fiscalBuckets, historical)
   stats.productAnalysis = buildProductAnalysisSection(productsMap, products, allInvoices)
   stats.customerAnalysis = buildCustomerAnalysisSection(customersMap, allInvoices)
@@ -215,19 +223,33 @@ function buildCashSalesSection(cashInvoices, allInvoices, historical) {
 /* ================================================================
    SECCION 3 - VENTAS A CREDITO
    ================================================================ */
-function buildCreditSalesSection(creditInvoices, historical) {
+function buildCreditSalesSection(creditInvoices, historical, refundsByInvoice = new Map()) {
   const totalVendido = creditInvoices.reduce((s, inv) => s + Number(inv.totals?.total || 0), 0)
-  const totalCobrado = creditInvoices.reduce((s, inv) => s + Number(inv.paidAmount || 0), 0)
-  const totalPendiente = creditInvoices.reduce((s, inv) => s + pendingAmt(inv), 0)
+  const totalCobrado = creditInvoices.reduce((s, inv) => {
+    const paid = Number(inv.paidAmount || 0)
+    const refunds = refundsByInvoice.get(inv.id) || 0
+    return s + Math.max(0, paid - refunds)
+  }, 0)
+  const totalPendiente = creditInvoices.reduce((s, inv) => {
+    const refunds = refundsByInvoice.get(inv.id) || 0
+    const effectivePaid = Math.max(0, Number(inv.paidAmount || 0) - refunds)
+    return s + pendingAmt(inv, effectivePaid)
+  }, 0)
   const clientes = new Set(creditInvoices.map((inv) => inv.customerId || inv.customerName)).size
   const facturas = creditInvoices.length
   const recuperacion = totalVendido > 0 ? (totalCobrado / totalVendido) * 100 : 0
   const now = new Date()
   const vencidas = creditInvoices.filter((inv) => {
     const due = inv.dueDate || inv.issuedAt || inv.createdAt
-    return due && new Date(due) < now && pendingAmt(inv) > 0
+    const refunds = refundsByInvoice.get(inv.id) || 0
+    const effectivePaid = Math.max(0, Number(inv.paidAmount || 0) - refunds)
+    return due && new Date(due) < now && pendingAmt(inv, effectivePaid) > 0
   })
-  const totalVencido = vencidas.reduce((s, inv) => s + pendingAmt(inv), 0)
+  const totalVencido = vencidas.reduce((s, inv) => {
+    const refunds = refundsByInvoice.get(inv.id) || 0
+    const effectivePaid = Math.max(0, Number(inv.paidAmount || 0) - refunds)
+    return s + pendingAmt(inv, effectivePaid)
+  }, 0)
 
   return {
     section: 'Ventas a Credito',
@@ -305,15 +327,21 @@ function buildProfitabilitySection(allInvoices, historical) {
 /* ================================================================
    SECCION 6 - CUENTAS POR COBRAR
    ================================================================ */
-function pendingAmt(inv) {
+function pendingAmt(inv, effectivePaid) {
+  if (effectivePaid != null) return Math.max(0, Number(inv.totals?.total || 0) - effectivePaid)
   if (inv.balanceDue != null) return Math.max(0, Number(inv.balanceDue))
   return Math.max(0, Number(inv.totals?.total || 0) - Number(inv.paidAmount || 0))
 }
 
-function buildAccountsReceivableSection(creditInvoices, allInvoices) {
+function buildAccountsReceivableSection(creditInvoices, allInvoices, refundsByInvoice = new Map()) {
   const now = new Date()
   const buckets = { '0-30': [], '31-60': [], '61-90': [], '90+': [] }
-  const validWithBalance = allInvoices.filter((inv) => classifyInvoice(inv) === 'valid' && pendingAmt(inv) > 0)
+  const effectivePending = (inv) => {
+    const refunds = refundsByInvoice.get(inv.id) || 0
+    const effectivePaid = Math.max(0, Number(inv.paidAmount || 0) - refunds)
+    return pendingAmt(inv, effectivePaid)
+  }
+  const validWithBalance = allInvoices.filter((inv) => classifyInvoice(inv) === 'valid' && effectivePending(inv) > 0)
 
   const overdue = validWithBalance.filter((inv) => {
     const due = inv.dueDate || inv.issuedAt || inv.createdAt
@@ -324,7 +352,7 @@ function buildAccountsReceivableSection(creditInvoices, allInvoices) {
     const due = inv.dueDate || inv.issuedAt || inv.createdAt
     const dueDate = due ? new Date(due) : now
     const daysOverdue = Math.max(0, Math.floor((now - dueDate) / (1000 * 60 * 60 * 24)))
-    const pend = pendingAmt(inv)
+    const pend = effectivePending(inv)
     const entry = { ...inv, daysOverdue, pendingAmount: pend }
     if (daysOverdue <= 30) buckets['0-30'].push(entry)
     else if (daysOverdue <= 60) buckets['31-60'].push(entry)
@@ -345,9 +373,9 @@ function buildAccountsReceivableSection(creditInvoices, allInvoices) {
     aging,
     totals: {
       pendingCount: validWithBalance.length,
-      pendingTotal: validWithBalance.reduce((s, i) => s + pendingAmt(i), 0),
+      pendingTotal: validWithBalance.reduce((s, i) => s + effectivePending(i), 0),
       overdueCount: overdue.length,
-      overdueTotal: overdue.reduce((s, i) => s + i.pendingAmount, 0),
+      overdueTotal: overdue.reduce((s, i) => s + effectivePending(i), 0),
     },
   }
 }
@@ -597,7 +625,7 @@ function isCreditMethod(method = '') {
   return String(method || '').toLowerCase().includes('credito') || String(method || '').toLowerCase().includes('crédito')
 }
 
-function invoiceMetric(document, sign = 1) {
+function invoiceMetric(document, sign = 1, effectivePaid) {
   const totals = document?.totals || {}
   const subtotal = sign * roundMoney(totals.subtotal ?? totals.total ?? document.total ?? 0)
   const taxableSubtotal = sign * roundMoney(totals.taxableSubtotal || 0)
@@ -608,9 +636,10 @@ function invoiceMetric(document, sign = 1) {
   const units = sign * roundMoney((document.items || []).reduce((sum, item) => sum + toNumber(item.quantity), 0))
   const rawProfit = subtotal - cost
   const absoluteTotal = Math.abs(total)
+  const usedPaid = effectivePaid != null ? effectivePaid : toNumber(document.paidAmount || 0)
   const paymentRatio = sign > 0
     ? (document.balanceDue <= 0 || document.status === 'paid' ? 1
-        : absoluteTotal > 0 ? Math.min(toNumber(document.paidAmount || 0) / absoluteTotal, 1) : 0)
+        : absoluteTotal > 0 ? Math.min(usedPaid / absoluteTotal, 1) : 0)
     : 1
   const effectiveProfit = roundMoney(rawProfit * paymentRatio)
   return { documents: sign > 0 ? 1 : 0, subtotal, taxableSubtotal, exemptSubtotal, tax, total, grossSales: sign > 0 ? total : 0, netRevenue: total, cost: sign > 0 ? roundMoney(cost * paymentRatio) : cost, utility: effectiveProfit, netProfit: effectiveProfit, creditNotes: 0, returns: 0, voidedDocuments: 0, unitsSold: units, paymentRatio }
