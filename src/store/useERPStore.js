@@ -2084,13 +2084,6 @@ export const useERPStore = create(
           if (!allPaymentsByInvoice[p.invoiceId]) allPaymentsByInvoice[p.invoiceId] = []
           allPaymentsByInvoice[p.invoiceId].push(p)
         })
-        var creditInvIds = new Set()
-        state.invoices.forEach(function(inv) {
-          if ((inv.payments || []).some(function(p) { return isCreditMethod(p.method) }) || isCreditMethod(inv.paymentMethod)) {
-            creditInvIds.add(inv.id)
-          }
-        })
-
         var nextReceivables = (state.receivables || []).map(function(rec) {
           var globalPayments = allPaymentsByInvoice[rec.invoiceId] || []
           var recvPayments = (rec.payments || []).filter(function(p) { return p.status !== 'deleted' })
