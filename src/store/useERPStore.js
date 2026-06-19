@@ -2046,6 +2046,81 @@ export const useERPStore = create(
         } catch(e) { console.error('Force persist error:', e) }
         return { removed, message: `Limpieza completada. Se eliminaron ${Object.values(removed).reduce((a, b) => a + b, 0)} registros huerfanos.` }
       },
+
+      recalculateFinancialFields() {
+        const state = get()
+        var fixed = { invoices: 0, receivables: 0, customers: 0 }
+        var nowVal = now()
+
+        var nextReceivables = (state.receivables || []).map(function(rec) {
+          var recvPayments = (rec.payments || []).filter(function(p) { return p.status !== 'deleted' })
+          var totalPaid = recvPayments.reduce(function(s, p) { return s + toNumber(p.amount) }, 0)
+          var financed = toNumber(rec.financedAmount || rec.total || 0)
+          var newBalance = moneyValue(Math.max(financed - totalPaid, 0))
+          var newPaid = moneyValue(Math.min(totalPaid, financed))
+          var newStatus = newBalance <= 0 ? 'paid' : totalPaid > 0 ? 'partial' : 'open'
+          if (Math.abs(toNumber(rec.balance) - newBalance) > 0.01 || Math.abs(toNumber(rec.paid) - newPaid) > 0.01 || rec.status !== newStatus) {
+            fixed.receivables++
+          }
+          return { ...rec, paid: newPaid, balance: newBalance, status: newStatus, updatedAt: nowVal }
+        })
+
+        var recvByInvoice = {}
+        nextReceivables.forEach(function(rec) { if (rec.invoiceId) recvByInvoice[rec.invoiceId] = rec })
+
+        var nextInvoices = state.invoices.map(function(inv) {
+          var recv = recvByInvoice[inv.id]
+          var isCreditInv = (inv.payments || []).some(function(p) { return isCreditMethod(p.method) }) || isCreditMethod(inv.paymentMethod)
+          if (!isCreditInv || !recv) return inv
+          var newPaidAmount = toNumber(recv.paid)
+          var newBalanceDue = toNumber(recv.balance)
+          var newStatus = newBalanceDue <= 0 ? 'paid' : newPaidAmount > 0 ? 'partial' : 'credit'
+          var newPaymentStatus = newBalanceDue <= 0 ? 'paid' : newPaidAmount > 0 ? 'partial' : 'pending'
+          if (Math.abs(toNumber(inv.paidAmount) - newPaidAmount) > 0.01 || Math.abs(toNumber(inv.balanceDue) - newBalanceDue) > 0.01 || inv.status !== newStatus) {
+            fixed.invoices++
+          }
+          return { ...inv, paidAmount: newPaidAmount, balanceDue: newBalanceDue, status: newStatus, paymentStatus: newPaymentStatus, updatedAt: nowVal }
+        })
+
+        var customerReceivables = {}
+        nextReceivables.forEach(function(rec) {
+          if (rec.balance > 0 && rec.customerId) {
+            customerReceivables[rec.customerId] = (customerReceivables[rec.customerId] || 0) + rec.balance
+          }
+        })
+
+        var nextCustomers = state.customers.map(function(cust) {
+          var expectedBalance = moneyValue(customerReceivables[cust.id] || 0)
+          if (Math.abs(toNumber(cust.balance) - expectedBalance) > 0.01) {
+            fixed.customers++
+          }
+          return { ...cust, balance: expectedBalance, updatedAt: nowVal }
+        })
+
+        var needsUpdate = fixed.invoices > 0 || fixed.receivables > 0 || fixed.customers > 0
+
+        if (needsUpdate) {
+          set({ receivables: nextReceivables, invoices: nextInvoices, customers: nextCustomers })
+          get().refreshReportStats()
+          try {
+            var persistKey2 = 'trifusion-erp-state-v2'
+            var raw2 = localStorage.getItem(persistKey2)
+            if (raw2) {
+              var parsed2 = JSON.parse(raw2)
+              var fresh2 = get()
+              parsed2.state.invoices = fresh2.invoices
+              parsed2.state.receivables = fresh2.receivables
+              parsed2.state.payments = fresh2.payments
+              parsed2.state.customers = fresh2.customers
+              parsed2.state.tenantData = fresh2.tenantData
+              localStorage.setItem(persistKey2, JSON.stringify(parsed2))
+            }
+          } catch(e) { console.error('Force persist error:', e) }
+          get().addAudit('data.recalculate', 'Sistema', null, fixed)
+        }
+
+        return { fixed, message: needsUpdate ? 'Balances recalculados desde pagos reales.' : 'Balances correctos, no requieren ajuste.' }
+      },
     }),
     {
       name: 'trifusion-erp-state-v2',

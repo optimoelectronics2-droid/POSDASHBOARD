@@ -288,6 +288,11 @@ export function SettingsPage() {
             toast.success(result.message)
             if (result.removed && Object.values(result.removed).some((v) => v > 0)) alert(JSON.stringify(result.removed, null, 2))
           }}>Limpiar datos huerfanos</Button>
+          <Button variant="secondary" icon={Sparkles} onClick={() => {
+            const result = useERPStore.getState().recalculateFinancialFields()
+            toast.success(result.message)
+            if (result.fixed && Object.values(result.fixed).some((v) => v > 0)) alert(JSON.stringify(result.fixed, null, 2))
+          }}>Recalcular balances</Button>
         </div>
       </section>
     </div>
