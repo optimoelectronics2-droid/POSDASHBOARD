@@ -171,6 +171,7 @@ export const useERPStore = create(
           company: activeCompany,
           settings: activeCompany,
         })
+        get().refreshReportStats()
       },
 
       createCompany(companyData = {}) {
@@ -190,6 +191,7 @@ export const useERPStore = create(
           ...workspace,
         })
         get().addAudit('company.create', 'SaaS', null, { id: company.id, name: company.name })
+        get().refreshReportStats()
         return company
       },
 
@@ -211,6 +213,7 @@ export const useERPStore = create(
           }
         })
         get().addAudit('company.update', 'SaaS', existing, company)
+        get().refreshReportStats()
         return company
       },
 
@@ -238,6 +241,7 @@ export const useERPStore = create(
           settings: nextCompany,
         })
         get().addAudit('company.delete', 'SaaS', deleting, null)
+        get().refreshReportStats()
         return deleting
       },
 
@@ -273,6 +277,7 @@ export const useERPStore = create(
           }
         })
         get().addAudit('fiscal_settings.update', 'Fiscal DGII', null, partialSettings)
+        get().refreshReportStats()
       },
 
       updateBrandingSettings(partialSettings) {
@@ -360,6 +365,7 @@ export const useERPStore = create(
           companies: state.companies.map((company) => (company.id === state.activeCompanyId ? { ...company, ...partialSettings, updatedAt: now() } : company)),
         }))
         get().addAudit('settings.update', 'Configuracion', null, partialSettings)
+        get().refreshReportStats()
       },
 
       updateExchangeRate(rate) {
@@ -1344,6 +1350,7 @@ export const useERPStore = create(
         }
         const reversalMovements = buildCreditNoteMovements(note, get().products)
         const creditCash = payments.filter((payment) => payment.method !== 'Credito').reduce((sum, payment) => sum + toNumber(payment.amount), 0)
+        const creditReduction = moneyValue(Math.max(totals.total - creditCash, 0))
         set((state) => ({
           creditNotes: [note, ...state.creditNotes],
           taxSequences: creditSequence ? state.taxSequences.map((sequence) => (sequence.id === 'B04' ? { ...sequence, next: toNumber(sequence.next) + 1 } : sequence)) : state.taxSequences,
@@ -1351,15 +1358,16 @@ export const useERPStore = create(
           inventoryMovements: [...reversalMovements, ...state.inventoryMovements],
           invoices: state.invoices.map((inv) => {
             if (inv.id !== invoiceId) return inv
-            const newBalanceDue = Math.max(toNumber(inv.balanceDue || inv.totals?.total || 0) - totals.total, 0)
-            return { ...inv, balanceDue: newBalanceDue, paidAmount: toNumber(inv.paidAmount || 0), paymentStatus: newBalanceDue <= 0 ? 'paid' : inv.paymentStatus, status: newBalanceDue <= 0 ? 'paid' : inv.status }
+            const newBalanceDue = Math.max(toNumber(inv.balanceDue || inv.totals?.total || 0) - creditReduction, 0)
+            const newPaidAmount = Math.max(toNumber(inv.paidAmount || 0) - creditCash, 0)
+            return { ...inv, balanceDue: newBalanceDue, paidAmount: newPaidAmount, paymentStatus: newBalanceDue <= 0 ? 'paid' : inv.paymentStatus, status: newBalanceDue <= 0 ? 'paid' : inv.status }
           }),
           receivables: state.receivables.map((receivable) => (
             receivable.invoiceId === invoiceId
-              ? { ...receivable, balance: Math.max(toNumber(receivable.balance) - totals.total, 0), status: toNumber(receivable.balance) - totals.total <= 0 ? 'paid' : receivable.status, updatedAt: now() }
+              ? { ...receivable, balance: Math.max(toNumber(receivable.balance) - creditReduction, 0), status: toNumber(receivable.balance) - creditReduction <= 0 ? 'paid' : receivable.status, updatedAt: now() }
               : receivable
           )),
-          customers: state.customers.map((customer) => (customer.id === invoice.customerId ? { ...customer, balance: Math.max(toNumber(customer.balance) - totals.total, 0), updatedAt: now() } : customer)),
+          customers: state.customers.map((customer) => (customer.id === invoice.customerId ? { ...customer, balance: Math.max(toNumber(customer.balance) - creditReduction, 0), updatedAt: now() } : customer)),
           cashRegister: {
             ...state.cashRegister,
             expected: state.cashRegister.expected - creditCash,
