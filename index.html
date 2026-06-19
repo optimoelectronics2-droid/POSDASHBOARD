@@ -28,6 +28,7 @@
             var total = (report.invalidStatusInvoices||0)+(report.orphanReceivables||0)+(report.orphanPayments||0)+(report.orphanInventoryMovements||0)+(report.orphanFinancialMovements||0)+(report.orphanCreditNotes||0)
             if (total > 0) state.cleanupOrphanData()
             state.recalculateFinancialFields()
+            state.refreshReportStats()
           } catch(e) { console.error('Auto-cleanup error:', e) }
         }
         setTimeout(check, 3000)

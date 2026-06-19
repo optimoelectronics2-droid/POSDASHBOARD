@@ -6,7 +6,7 @@ const CREDIT_METHODS = new Set(['credito', 'crédito', 'credit'])
 export function buildExecutiveDashboardModel({
   invoices = [], products = [], customers = [], receivables = [],
   expenses = [], creditNotes = [], payments = [], cashRegister = {},
-  reportStats = {}, inventoryReports = {},
+  reportStats = null, inventoryReports = null,
 } = {}) {
   const now = new Date()
   const companyId = cashRegister.companyId || ''

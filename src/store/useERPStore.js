@@ -25,6 +25,7 @@ import {
 import { buildCashCutReport, normalizeCashOpenInput } from '../lib/cashDeskEngine'
 import { addDaysIso, nowIso, todayIso } from '../lib/dateTime'
 import { sanitizeCashRegister, sanitizeOperationalData } from '../lib/realDataGuards'
+import { rebuildReports, auditIntegrity, detectDuplicates, reconcileInventory, reconcileFinancials, systemHealth } from '../lib/auditEngine'
 
 const today = todayIso
 const now = nowIso
@@ -339,6 +340,30 @@ export const useERPStore = create(
         })
         set({ inventoryReports })
         return inventoryReports
+      },
+
+      rebuildReports() {
+        return rebuildReports(get())
+      },
+
+      systemHealth() {
+        return systemHealth(get())
+      },
+
+      auditIntegrity() {
+        return auditIntegrity(get())
+      },
+
+      detectDuplicates() {
+        return detectDuplicates(get())
+      },
+
+      reconcileInventory() {
+        return reconcileInventory(get())
+      },
+
+      reconcileFinancials() {
+        return reconcileFinancials(get())
       },
 
       addAudit(action, module, before = null, after = null) {
@@ -2052,9 +2077,25 @@ export const useERPStore = create(
         var fixed = { invoices: 0, receivables: 0, customers: 0 }
         var nowVal = now()
 
+        var allPaymentsByInvoice = {}
+        ;(state.payments || []).forEach(function(p) {
+          if (p.status === 'deleted' || p.status === 'voided') return
+          if (!p.invoiceId) return
+          if (!allPaymentsByInvoice[p.invoiceId]) allPaymentsByInvoice[p.invoiceId] = []
+          allPaymentsByInvoice[p.invoiceId].push(p)
+        })
+        var creditInvIds = new Set()
+        state.invoices.forEach(function(inv) {
+          if ((inv.payments || []).some(function(p) { return isCreditMethod(p.method) }) || isCreditMethod(inv.paymentMethod)) {
+            creditInvIds.add(inv.id)
+          }
+        })
+
         var nextReceivables = (state.receivables || []).map(function(rec) {
+          var globalPayments = allPaymentsByInvoice[rec.invoiceId] || []
           var recvPayments = (rec.payments || []).filter(function(p) { return p.status !== 'deleted' })
-          var totalPaid = recvPayments.reduce(function(s, p) { return s + toNumber(p.amount) }, 0)
+          var allPayments = globalPayments.length > recvPayments.length ? globalPayments : recvPayments
+          var totalPaid = allPayments.reduce(function(s, p) { return s + toNumber(p.amount) }, 0)
           var financed = toNumber(rec.financedAmount || rec.total || 0)
           var newBalance = moneyValue(Math.max(financed - totalPaid, 0))
           var newPaid = moneyValue(Math.min(totalPaid, financed))
@@ -2070,8 +2111,7 @@ export const useERPStore = create(
 
         var nextInvoices = state.invoices.map(function(inv) {
           var recv = recvByInvoice[inv.id]
-          var isCreditInv = (inv.payments || []).some(function(p) { return isCreditMethod(p.method) }) || isCreditMethod(inv.paymentMethod)
-          if (!isCreditInv || !recv) return inv
+          if (!recv) return inv
           var newPaidAmount = toNumber(recv.paid)
           var newBalanceDue = toNumber(recv.balance)
           var newStatus = newBalanceDue <= 0 ? 'paid' : newPaidAmount > 0 ? 'partial' : 'credit'
@@ -2157,8 +2197,9 @@ export const useERPStore = create(
         categories: state.categories,
         selectedBranch: state.selectedBranch,
         documentCounters: state.documentCounters,
-        reportStats: state.reportStats,
-        inventoryReports: state.inventoryReports,
+        // NOT persisted - recomputed on every page load
+        // reportStats: state.reportStats,
+        // inventoryReports: state.inventoryReports,
         collapsed: state.collapsed,
         commandOpen: false,
       }),

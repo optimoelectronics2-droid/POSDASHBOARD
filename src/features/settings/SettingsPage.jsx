@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Building2, Pencil, Plus, Printer, Save, ShieldCheck, Sparkles, Trash2 } from 'lucide-react'
+import { Activity, AlertTriangle, BarChart3, Building2, ClipboardList, Database, Pencil, Plus, Printer, RefreshCw, Save, ShieldCheck, Sparkles, Trash2 } from 'lucide-react'
 import { Button } from '../../components/ui/Button'
 import { useToast } from '../../hooks/useToast'
 import { useERPStore } from '../../store/useERPStore'
@@ -293,6 +293,93 @@ export function SettingsPage() {
             toast.success(result.message)
             if (result.fixed && Object.values(result.fixed).some((v) => v > 0)) alert(JSON.stringify(result.fixed, null, 2))
           }}>Recalcular balances</Button>
+        </div>
+      </section>
+
+      <section className="panel rounded-lg p-5">
+        <div className="mb-4 flex items-center gap-3"><Activity className="text-purple-300" /><div><h2 className="font-display text-2xl font-bold">Panel de auditoria</h2><p className="text-sm text-white/45">Diagnostico completo del sistema: integridad, duplicados, inventario y finanzas.</p></div></div>
+        <div className="flex flex-wrap gap-3">
+          <Button variant="secondary" icon={BarChart3} onClick={() => {
+            const health = useERPStore.getState().systemHealth()
+            const lines = [
+              '=== SALUD DEL SISTEMA ===',
+              `Puntuacion general: ${health.overallScore}/100 (${health.overallLevel})`,
+              `Problemas totales: ${health.totalProblems}`,
+              '',
+              'INTEGRIDAD:',
+              `  Problemas de integridad: ${health.integrity.totalIssues}`,
+              `  Huerfanos: ${health.integrity.orphans}`,
+              `  Inconsistencias: ${health.integrity.inconsistencies}`,
+              `  Facturas credito con saldo incorrecto: ${health.integrity.creditInvoiceBalanceIssues}`,
+              '',
+              'DUPLICADOS:',
+              `  Total: ${health.duplicates.count}`,
+              '',
+              'INVENTARIO:',
+              `  Productos con discrepancia: ${health.inventory.productsWithIssues}`,
+              `  Stock real: ${health.inventory.totalExpectedStock}, Stock registrado: ${health.inventory.totalActualStock}`,
+              '',
+              'FINANZAS:',
+              `  Estado: ${health.financials.status}`,
+              `  Diferencia conciliacion: ${health.financials.reconciliationDiff}`,
+              `  Caja esperada: ${health.financials.registerExpected}, Balance calculado: ${health.financials.expectedCashBalance}`,
+              '',
+              '=== REPORTES COMPUTADOS DESDE ORIGEN ===',
+              `Ventas totales: ${health.reports.totals.totalRevenue}`,
+              `Ventas contado: ${health.reports.totals.cashSales}`,
+              `Ventas credito: ${health.reports.totals.creditSales}`,
+              `Cuentas por cobrar: ${health.reports.totals.receivablesBalance}`,
+              `Vencido: ${health.reports.totals.overdueBalance}`,
+              `Ganancia total: ${health.reports.totals.totalProfit}`,
+              `Gastos: ${health.reports.totals.totalExpenses}`,
+              `Ganancia neta: ${health.reports.totals.netProfit}`,
+              `ITBIS cobrado: ${health.reports.totals.totalTax}`,
+              `Ticket promedio: ${health.reports.totals.avgTicket}`,
+              `Abonos recibidos: ${health.reports.totals.abonosTotal}`,
+              '',
+              'FUENTES:',
+              `Facturas: ${health.reports.source.invoiceCount}`,
+              `Pagos: ${health.reports.source.paymentCount}`,
+              `CxC: ${health.reports.source.receivableCount}`,
+              `Gastos: ${health.reports.source.expenseCount}`,
+              `NC: ${health.reports.source.creditNoteCount}`,
+              `Productos: ${health.reports.source.productCount}`,
+              `Clientes: ${health.reports.source.customerCount}`,
+            ].join('\n')
+            alert(lines)
+          }}>Salud del sistema</Button>
+          <Button variant="secondary" icon={AlertTriangle} onClick={() => {
+            const result = useERPStore.getState().auditIntegrity()
+            if (result.issues.length === 0) { toast.success('Sin problemas de integridad.') } else { alert(result.details.join('\n')) }
+          }}>Auditar integridad</Button>
+          <Button variant="secondary" icon={ClipboardList} onClick={() => {
+            const dups = useERPStore.getState().detectDuplicates()
+            if (dups.length === 0) { toast.success('Sin duplicados.') } else { alert(JSON.stringify(dups, null, 2)) }
+          }}>Detectar duplicados</Button>
+          <Button variant="secondary" icon={Database} onClick={() => {
+            const result = useERPStore.getState().reconcileInventory()
+            if (result.productsWithIssues === 0) { toast.success('Inventario reconciliado. Sin discrepancias.') } else { alert(JSON.stringify(result.discrepancies.slice(0, 30), null, 2)) }
+          }}>Reconciliar inventario</Button>
+          <Button variant="secondary" icon={BarChart3} onClick={() => {
+            const result = useERPStore.getState().reconcileFinancials()
+            const lines = [
+              `Ventas contado: ${result.cashSalesTotal}`,
+              `Abonos recibidos: ${result.abonosTotal}`,
+              `Devoluciones NC: ${result.creditNoteRefunds}`,
+              `Gastos: ${result.expensesTotal}`,
+              `Ingreso efectivo esperado: ${result.expectedCashIncome}`,
+              `Balance calculado: ${result.expectedCashBalance}`,
+              `Caja segun registros: ${result.registerExpected}`,
+              `Diferencia caja: ${result.registerDifference}`,
+              `Diferencia conciliacion: ${result.reconciliationDiff}`,
+              `Estado: ${result.status}`,
+            ].join('\n')
+            alert(lines)
+          }}>Reconciliar finanzas</Button>
+          <Button variant="secondary" icon={RefreshCw} onClick={() => {
+            useERPStore.getState().rebuildReports()
+            toast.success('Reportes reconstruidos desde datos fuente.')
+          }}>Reconstruir reportes</Button>
         </div>
       </section>
     </div>
