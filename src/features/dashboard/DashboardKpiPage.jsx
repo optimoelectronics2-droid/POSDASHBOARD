@@ -353,13 +353,15 @@ function receivableReport({ receivables, invoices, filters, model, companyId }) 
     Estado: row.status || '',
     InvoiceId: row.invoiceId || '',
   }))
-  const totalFinanced = sum(active, (r) => Number(r.total || 0))
+  const totalFacturado = sum(active, (r) => Number(r.total || 0))
+  const totalFinanced = sum(active, (r) => Number(r.financedAmount || r.total || 0))
   const totalPaid = sum(active, (r) => Number(r.paid || 0))
   const totalBalance = sum(active, (r) => Number(r.balance || 0))
   const overdue = active.filter((r) => r.dueDate && new Date(r.dueDate) < new Date() && r.balance > 0)
   return {
     ...baseReport('Cuentas por cobrar', 'CxC', 'cuentas-por-cobrar', ['Cliente', 'Factura', 'Total', 'Financiado', 'Cobrado', 'Balance', 'Vence', 'Abonos', 'Estado'], rows, [
       ['Cuentas', active.length],
+      ['Total facturado', currency.format(totalFacturado)],
       ['Financiado total', currency.format(totalFinanced)],
       ['Cobrado total', currency.format(totalPaid)],
       ['Balance pendiente', currency.format(totalBalance)],
@@ -471,7 +473,8 @@ function executiveSummary({ model, receivables, invoices, companyId }) {
   const activeReceivables = receivables.filter((r) => isActiveReceivable(r, validInvoices))
   const totalCxC = activeReceivables.reduce((s, r) => s + Number(r.balance || 0), 0)
   const totalCreditPaid = activeReceivables.reduce((s, r) => s + Number(r.paid || 0), 0)
-  const totalCreditFinanced = activeReceivables.reduce((s, r) => s + Number(r.total || 0), 0)
+  const totalCreditFinanced = activeReceivables.reduce((s, r) => s + Number(r.financedAmount || r.total || 0), 0)
+  const totalCreditFacturado = activeReceivables.reduce((s, r) => s + Number(r.total || 0), 0)
   const stats = [
     ['Ventas contado hoy', currency.format(totals.todayCashSales || 0)],
     ['Ventas credito hoy (emitido)', currency.format(totals.todayCreditSales || 0)],
@@ -494,6 +497,7 @@ function executiveSummary({ model, receivables, invoices, companyId }) {
     ['Facturas hoy', totals.invoicesToday || 0],
     ['Clientes nuevos hoy', totals.newCustomersToday || 0],
     ['Prod. vendidos hoy', totals.productsSoldToday || 0],
+    ['CxC total facturado', currency.format(totalCreditFacturado)],
     ['CxC financiado total', currency.format(totalCreditFinanced)],
     ['CxC cobrado total', currency.format(totalCreditPaid)],
     ['CxC pendiente actual', currency.format(totalCxC)],
